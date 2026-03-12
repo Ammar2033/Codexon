@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { v4 as uuidv4 } from 'uuid';
-import { logger } from './logger';
+import { logger } from '../services/logger';
+import db from '../config/db';
 
 declare global {
   namespace Express {
@@ -129,4 +130,45 @@ export function injectTraceContext(obj: any, req?: Request): any {
     'x-trace-id': traceId,
     'x-span-id': spanId
   };
+}
+
+interface TraceData {
+  trace_id: string;
+  request_id?: string;
+  model_id?: string;
+  user_id?: number;
+  endpoint?: string;
+  method?: string;
+  status_code?: number;
+  latency_ms?: number;
+  container_id?: string;
+  node_name?: string;
+  error?: string;
+}
+
+export async function saveTrace(traceId: string, data: TraceData): Promise<void> {
+  try {
+    await db.query(
+      `INSERT INTO request_traces (trace_id, request_id, model_id, user_id, endpoint, method, status_code, latency_ms, container_id, node_name, error, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
+       ON CONFLICT (trace_id) DO UPDATE SET
+         status_code = EXCLUDED.status_code,
+         latency_ms = EXCLUDED.latency_ms`,
+      [
+        data.trace_id || traceId,
+        data.request_id,
+        data.model_id,
+        data.user_id,
+        data.endpoint,
+        data.method,
+        data.status_code,
+        data.latency_ms,
+        data.container_id,
+        data.node_name,
+        data.error
+      ]
+    );
+  } catch (error) {
+    logger.warn({ traceId, error: (error as Error).message }, 'Failed to save trace');
+  }
 }

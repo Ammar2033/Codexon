@@ -271,3 +271,8 @@ function parseGpuMemory(mem: string): number {
 export function getContainerByModel(modelId: string): ContainerInfo | undefined {
   return containers.get(modelId);
 }
+
+export function getContainersByModel(modelId: string): ContainerInfo[] {
+  const container = containers.get(modelId);
+  return container ? [container] : [];
+}

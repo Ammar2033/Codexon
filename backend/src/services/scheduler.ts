@@ -42,11 +42,29 @@ const GPU_NODE_MAPPING_KEY = 'codexon:gpu_node_mapping';
 
 class Scheduler {
   private nodes: Map<string, NodeInfo> = new Map();
+  private gpuAllocations: Map<string, number[]> = new Map();
   private updateInterval: NodeJS.Timeout | null = null;
   private healthCheckInterval: NodeJS.Timeout | null = null;
 
   constructor() {
+    this.loadAllocationsFromRedis();
     this.startNodeMonitoring();
+  }
+
+  private async loadAllocationsFromRedis(): Promise<void> {
+    try {
+      const keys = await redis.keys(`${GPU_ALLOCATIONS_KEY}:*`);
+      for (const key of keys) {
+        const nodeId = key.replace(`${GPU_ALLOCATIONS_KEY}:`, '');
+        const data = await redis.get(key);
+        if (data) {
+          this.gpuAllocations.set(nodeId, JSON.parse(data));
+        }
+      }
+      logger.info({ count: this.gpuAllocations.size }, 'Loaded GPU allocations from Redis');
+    } catch (error) {
+      logger.warn({ error: (error as Error).message }, 'Failed to load GPU allocations from Redis');
+    }
   }
 
   async registerNode(nodeInfo: NodeInfo): Promise<void> {
@@ -167,31 +185,37 @@ class Scheduler {
   }
 
   private getNodeAllocations(nodeId: string): number[] {
-    const key = `${GPU_ALLOCATIONS_KEY}:${nodeId}`;
-    try {
-      const data = redis.get(key);
-      if (!data) return [];
-      return JSON.parse(data);
-    } catch {
-      return [];
-    }
+    return this.gpuAllocations.get(nodeId) || [];
+  }
+
+  private async getNodeAllocationsAsync(nodeId: string): Promise<number[]> {
+    return this.getNodeAllocations(nodeId);
+  }
+
+  private async syncAllocationsToRedis(nodeId: string): Promise<void> {
+    const allocations = this.gpuAllocations.get(nodeId) || [];
+    await redis.set(`${GPU_ALLOCATIONS_KEY}:${nodeId}`, JSON.stringify(allocations));
   }
 
   private async reserveGpus(modelId: string, nodeId: string, gpuIds: number[]): Promise<void> {
     const allocationKey = `${GPU_ALLOCATIONS_KEY}:${nodeId}`;
     const mappingKey = `${GPU_NODE_MAPPING_KEY}:${modelId}`;
     
-    const currentAllocations = await this.getNodeAllocations(nodeId);
+    const currentAllocations = this.getNodeAllocations(nodeId);
     const updatedAllocations = [...new Set([...currentAllocations, ...gpuIds])];
     
+    this.gpuAllocations.set(nodeId, updatedAllocations);
     await redis.set(allocationKey, JSON.stringify(updatedAllocations));
     await redis.hset(mappingKey, nodeId, JSON.stringify(gpuIds));
     await redis.expire(allocationKey, 3600);
     await redis.expire(mappingKey, 3600);
+    
+    logger.info({ nodeId, modelId, gpuIds }, 'GPUs reserved');
   }
 
   private async cleanupNodeAllocations(nodeId: string): Promise<void> {
     const allocationKey = `${GPU_ALLOCATIONS_KEY}:${nodeId}`;
+    this.gpuAllocations.delete(nodeId);
     await redis.del(allocationKey);
     
     const modelKeys = await redis.keys(`${GPU_NODE_MAPPING_KEY}:*`);
@@ -206,15 +230,16 @@ class Scheduler {
     
     for (const [nodeId, gpuIdsJson] of Object.entries(nodeGpus)) {
       const gpuIds = JSON.parse(gpuIdsJson);
-      const allocationKey = `${GPU_ALLOCATIONS_KEY}:${nodeId}`;
       
-      const currentAllocations = await this.getNodeAllocations(nodeId);
+      const currentAllocations = this.getNodeAllocations(nodeId);
       const remainingAllocations = currentAllocations.filter(g => !gpuIds.includes(g));
       
+      this.gpuAllocations.set(nodeId, remainingAllocations);
+      
       if (remainingAllocations.length === 0) {
-        await redis.del(allocationKey);
+        await redis.del(`${GPU_ALLOCATIONS_KEY}:${nodeId}`);
       } else {
-        await redis.set(allocationKey, JSON.stringify(remainingAllocations));
+        await redis.set(`${GPU_ALLOCATIONS_KEY}:${nodeId}`, JSON.stringify(remainingAllocations));
       }
     }
     

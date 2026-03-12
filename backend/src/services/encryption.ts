@@ -24,11 +24,25 @@ export function initializeEncryption(key: string): void {
 }
 
 function getKey(): Buffer {
-  if (!config) {
-    const defaultKey = process.env.ENCRYPTION_KEY || 'default_development_key_change_in_production';
-    return crypto.scryptSync(defaultKey, 'codexon_salt', KEY_LENGTH);
+  if (config) {
+    return config.key;
   }
-  return config.key;
+  
+  const envKey = process.env.ENCRYPTION_KEY;
+  
+  if (!envKey) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('CRITICAL: ENCRYPTION_KEY environment variable must be set in production');
+    }
+    logger.warn('Using default encryption key - NOT SAFE FOR PRODUCTION');
+    return crypto.scryptSync('default_development_key_change_in_production', 'codexon_salt', KEY_LENGTH);
+  }
+  
+  if (envKey.length < 32) {
+    throw new Error('ENCRYPTION_KEY must be at least 32 characters');
+  }
+  
+  return crypto.scryptSync(envKey, 'codexon_salt', KEY_LENGTH);
 }
 
 export async function encryptFile(inputPath: string, outputPath: string): Promise<void> {

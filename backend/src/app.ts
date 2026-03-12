@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import rateLimit from 'express-rate-limit';
@@ -8,13 +8,15 @@ import modelsRouter from './routes/models';
 import usersRouter from './routes/users';
 import apiKeysRouter from './routes/apiKeys';
 import revenueRouter from './routes/revenue';
-import { logger, metrics } from './services/logger';
+import { logger } from './services/logger';
 import { getMetrics, getContentType, collectDefaultMetrics } from './services/metrics';
-import { tracingMiddleware, extractTraceContext, createSpan } from './middleware/tracing';
+import { tracingMiddleware, createSpan, saveTrace } from './middleware/tracing';
 import { initializeServices, shutdownServices } from './services/service_manager';
-import { getQueueStats, getModelQueue, addInferenceJob, addBatchJob } from './services/queue_system';
-import { getContainerByModel, getAllContainers } from './services/runtime_manager';
+import { getQueueStats, addInferenceJob, addBatchJob } from './services/queue_system';
+import { getContainerByModel, getAllContainers, getContainersByModel, ContainerInfo } from './services/runtime_manager';
 import { getClusterStatus } from './services/scheduler';
+import { validateInferenceInput, validateBatchInput, validateModelId } from './services/validator';
+import { AuthRequest, getUserFromRequest } from './middleware/auth';
 import db from './config/db';
 import path from 'path';
 
@@ -54,7 +56,7 @@ const modelSpecificLimiter = rateLimit({
 
 app.use(globalLimiter);
 
-app.get('/health', async (req, res) => {
+app.get('/health', async (req: Request, res: Response) => {
   let queueStats = { active: 0, waiting: 0, completed: 0, failed: 0 };
   let containersCount = 0;
   let gpuStatus: any = { totalNodes: 0, onlineNodes: 0, totalGpus: 0, availableGpus: 0 };
@@ -65,7 +67,7 @@ app.get('/health', async (req, res) => {
   
   try {
     const containers = getAllContainers();
-    containersCount = containers.length;
+    containersCount = containers ? containers.length : 0;
   } catch (e) {}
   
   try {
@@ -84,7 +86,7 @@ app.get('/health', async (req, res) => {
   });
 });
 
-app.get('/metrics', async (req, res) => {
+app.get('/metrics', async (req: Request, res: Response) => {
   try {
     res.set('Content-Type', getContentType());
     res.send(await getMetrics());
@@ -94,10 +96,10 @@ app.get('/metrics', async (req, res) => {
   }
 });
 
-app.get('/metrics/json', async (req, res) => {
+app.get('/metrics/json', async (req: Request, res: Response) => {
   try {
     const queueStats = await getQueueStats();
-    const containers = getAllContainers();
+    const containers = getAllContainers() || [];
     const gpuStatus = await getClusterStatus();
     const dbStats = await getDatabaseStats();
     
@@ -110,6 +112,9 @@ app.get('/metrics/json', async (req, res) => {
       },
       gpu: gpuStatus,
       database: dbStats,
+      application: {}
+    });
+  } catch (error) {
       application: metrics.getMetrics()
     });
   } catch (error) {
@@ -118,7 +123,7 @@ app.get('/metrics/json', async (req, res) => {
   }
 });
 
-app.get('/trace/:traceId', async (req, res) => {
+app.get('/trace/:traceId', async (req: Request, res: Response) => {
   const { traceId } = req.params;
   
   try {
@@ -136,17 +141,17 @@ app.get('/trace/:traceId', async (req, res) => {
   }
 });
 
-app.get('/queue/:modelId/stats', async (req, res) => {
+app.get('/queue/:modelId/stats', async (req: Request, res: Response) => {
   const { modelId } = req.params;
   
   try {
     const stats = await getQueueStats(modelId);
-    const containers = getContainerByModel(modelId);
+    const containers = getContainersByModel(modelId);
     
     res.json({
       modelId,
       queue: stats,
-      containers: containers.map(c => ({
+      containers: containers.map((c: ContainerInfo) => ({
         containerId: c.containerId,
         status: c.status,
         currentLoad: c.currentLoad,
@@ -158,25 +163,43 @@ app.get('/queue/:modelId/stats', async (req, res) => {
   }
 });
 
-app.post('/inference/:modelId', modelSpecificLimiter, async (req, res) => {
+app.post('/inference/:modelId', modelSpecificLimiter, async (req: AuthRequest, res: Response) => {
   const { modelId } = req.params;
-  const { input } = req.body;
-  const apiKey = req.headers['x-api-key'] as string;
-  const requestId = req.headers['x-request-id'] as string || uuidv4();
+  const requestId = (req.headers['x-request-id'] as string) || uuidv4();
+  
+  if (!validateModelId(modelId)) {
+    return res.status(400).json({ error: 'Invalid model ID format' });
+  }
+  
+  const validation = validateInferenceInput(req.body);
+  if (!validation.success) {
+    return res.status(400).json({ error: validation.error || 'Invalid input' });
+  }
   
   const span = createSpan('inference_request', req.traceId, req.spanId);
+  
+  const user = getUserFromRequest(req);
+  if (!user) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
   
   try {
     const result = await addInferenceJob({
       modelId,
-      userId: 1,
-      input,
-      apiKeyId: apiKey || '',
+      userId: user.userId.toString(),
+      input: validation.data?.input || {},
+      apiKeyId: req.apiKeyId || '',
       priority: 'normal',
       requestId
     });
     
     span.end(true);
+    await saveTrace(req.traceId!, {
+      model_id: modelId,
+      user_id: user.userId,
+      latency: 0,
+      status_code: 202
+    });
     
     res.json({
       requestId,
@@ -192,30 +215,49 @@ app.post('/inference/:modelId', modelSpecificLimiter, async (req, res) => {
   }
 });
 
-app.post('/batch/:modelId', modelSpecificLimiter, async (req, res) => {
+app.post('/batch/:modelId', modelSpecificLimiter, async (req: AuthRequest, res: Response) => {
   const { modelId } = req.params;
-  const { inputs } = req.body;
   const batchId = uuidv4();
+  
+  if (!validateModelId(modelId)) {
+    return res.status(400).json({ error: 'Invalid model ID format' });
+  }
+  
+  const validation = validateBatchInput(req.body);
+  if (!validation.success) {
+    return res.status(400).json({ error: validation.error || 'Invalid input' });
+  }
+  
+  const user = getUserFromRequest(req);
+  if (!user) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
   
   const span = createSpan('batch_inference_request', req.traceId, req.spanId);
   
   try {
     const result = await addBatchJob({
       modelId,
-      inputs,
-      userId: 1,
-      apiKeyId: '',
+      inputs: validation.data?.inputs || [],
+      userId: user.userId.toString(),
+      apiKeyId: req.apiKeyId || '',
       batchId
     });
     
     span.end(true);
+    await saveTrace(req.traceId!, {
+      model_id: modelId,
+      user_id: user.userId,
+      latency: 0,
+      status_code: 202
+    });
     
     res.json({
       batchId,
       traceId: req.traceId,
       status: 'queued',
       jobId: result.id,
-      inputCount: inputs.length
+      inputCount: validation.data?.inputs?.length || 0
     });
   } catch (error) {
     span.setError(error as Error);
@@ -225,7 +267,7 @@ app.post('/batch/:modelId', modelSpecificLimiter, async (req, res) => {
   }
 });
 
-app.get('/streaming/:modelId', (req, res) => {
+app.get('/streaming/:modelId', (req: Request, res: Response) => {
   const { modelId } = req.params;
   
   res.setHeader('Content-Type', 'text/event-stream');
@@ -233,8 +275,9 @@ app.get('/streaming/:modelId', (req, res) => {
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
   
-  if (req.headers['x-trace-id']) {
-    res.setHeader('X-Trace-ID', req.headers['x-trace-id'] as string);
+  const traceIdHeader = req.headers['x-trace-id'];
+  if (traceIdHeader) {
+    res.setHeader('X-Trace-ID', traceIdHeader as string);
   }
   
   const sendChunk = (data: any) => {
@@ -264,7 +307,7 @@ app.get('/streaming/:modelId', (req, res) => {
   });
 });
 
-app.use((req, res, next) => {
+app.use((req: Request, res: Response, next: NextFunction) => {
   logger.info({
     traceId: req.traceId,
     spanId: req.spanId,
@@ -281,7 +324,7 @@ app.use('/users', usersRouter);
 app.use('/api-keys', apiKeysRouter);
 app.use('/revenue', revenueRouter);
 
-app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+app.use((err: any, req: Request, res: Response, next: NextFunction) => {
   logger.error({ 
     error: err.message,
     stack: err.stack,

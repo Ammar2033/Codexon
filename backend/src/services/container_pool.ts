@@ -1,6 +1,7 @@
 import { logger } from '../logger';
 import { ContainerInfo, allocateContainer, destroyContainer, recordRequest, getAllContainers, updateContainerMetrics, ContainerConfig } from './runtime_manager';
 import { getContainerByModel } from './runtime_manager';
+import Redis from 'ioredis';
 
 export interface PoolConfig {
   minSize: number;
@@ -30,6 +31,36 @@ const containerPools: Map<string, PooledContainer[]> = new Map();
 const poolConfigs: Map<string, PoolConfig> = new Map();
 const healthCheckInterval: Map<string, NodeJS.Timeout> = new Map();
 const metricsInterval: NodeJS.Timeout | null = null;
+const usedPorts: Set<number> = new Set();
+
+const redis = new Redis({
+  host: process.env.REDIS_HOST || 'localhost',
+  port: parseInt(process.env.REDIS_PORT || '6379'),
+  lazy: true
+});
+
+async function getNextAvailablePort(): Promise<number> {
+  const basePort = 9000;
+  const maxPort = 9999;
+  
+  for (let port = basePort; port <= maxPort; port++) {
+    if (!usedPorts.has(port)) {
+      const inUse = await redis.exists(`codexon:port:${port}`);
+      if (!inUse) {
+        usedPorts.add(port);
+        await redis.setex(`codexon:port:${port}`, 3600, '1');
+        return port;
+      }
+    }
+  }
+  
+  throw new Error('No available ports');
+}
+
+async function releasePort(port: number): Promise<void> {
+  usedPorts.delete(port);
+  await redis.del(`codexon:port:${port}`);
+}
 
 export function configurePool(modelId: string, config: Partial<PoolConfig>): void {
   poolConfigs.set(modelId, { ...DEFAULT_POOL_CONFIG, ...config });
@@ -58,7 +89,7 @@ async function prewarmPool(modelId: string, config: ContainerConfig, count: numb
   
   for (let i = 0; i < count; i++) {
     try {
-      const port = 9000 + Math.floor(Math.random() * 1000) + i;
+      const port = await getNextAvailablePort();
       const info = await allocateContainer({ ...config, port });
       
       await new Promise(resolve => setTimeout(resolve, 5000));
@@ -81,7 +112,7 @@ export async function acquireContainer(modelId: string, config: ContainerConfig)
   const poolConfig = poolConfigs.get(modelId) || DEFAULT_POOL_CONFIG;
   
   if (!pool || pool.length === 0) {
-    const port = 9000 + Math.floor(Math.random() * 1000);
+    const port = await getNextAvailablePort();
     const info = await allocateContainer({ ...config, port });
     
     pool = [{
@@ -97,7 +128,7 @@ export async function acquireContainer(modelId: string, config: ContainerConfig)
   
   if (available.length === 0) {
     if (pool.length < poolConfig.maxSize) {
-      const port = 9000 + Math.floor(Math.random() * 1000);
+      const port = await getNextAvailablePort();
       const info = await allocateContainer({ ...config, port });
       
       pool.push({
@@ -133,7 +164,7 @@ export async function acquireContainer(modelId: string, config: ContainerConfig)
       
     case 'least_load':
       selected = available
-        .sort((a, b) => a.info.currentLoad - b.info.currentLoad)[0];
+        .sort((a, b) => a.idleSince.getTime() - b.idleSince.getTime())[0];
       break;
       
     case 'random':
@@ -157,6 +188,13 @@ export async function releaseContainer(modelId: string, latency: number): Promis
     await recordRequest(modelId, latency);
     container.idleSince = new Date();
     container.info.status = 'ready';
+  }
+}
+
+export async function releaseContainerAndPort(modelId: string, latency: number, port?: number): Promise<void> {
+  await releaseContainer(modelId, latency);
+  if (port) {
+    await releasePort(port);
   }
 }
 

@@ -19,6 +19,9 @@ const QUEUE_PREFIX = 'inference';
 const BATCH_SIZE = 8;
 const BATCH_TIMEOUT_MS = 100;
 
+const MAX_QUEUE_SIZE_PER_MODEL = 1000;
+const MAX_TOTAL_QUEUE_SIZE = 10000;
+
 interface InferenceJobData {
   modelId: string;
   userId: string;
@@ -98,6 +101,20 @@ export async function addInferenceJob(
 ): Promise<Job<InferenceJobData>> {
   const queue = getModelQueue(data.modelId);
   
+  const [waiting, active] = await Promise.all([
+    queue.getWaitingCount(),
+    queue.getActiveCount()
+  ]);
+  
+  if (waiting + active >= MAX_QUEUE_SIZE_PER_MODEL) {
+    throw new Error(`Queue full for model ${data.modelId}. Please try again later.`);
+  }
+  
+  const globalStats = await getQueueStats();
+  if (globalStats.waiting + globalStats.active >= MAX_TOTAL_QUEUE_SIZE) {
+    throw new Error('System is under high load. Please try again later.');
+  }
+  
   const priorityValue = priority === 'high' ? 10 : priority === 'low' ? 1 : 5;
   
   return queue.add('inference', data, {
@@ -111,6 +128,19 @@ export async function addBatchJob(
 ): Promise<Job<BatchJobData>> {
   const queue = getBatchQueue(data.modelId);
   
+  const [waiting, active] = await Promise.all([
+    queue.getWaitingCount(),
+    queue.getActiveCount()
+  ]);
+  
+  if (waiting + active >= MAX_QUEUE_SIZE_PER_MODEL) {
+    throw new Error(`Batch queue full for model ${data.modelId}. Please try again later.`);
+  }
+  
+  if (data.inputs.length > BATCH_SIZE) {
+    throw new Error(`Batch size exceeds maximum of ${BATCH_SIZE}`);
+  }
+  
   return queue.add('batch', data, {
     priority: 5,
     jobId: data.batchId
@@ -123,6 +153,8 @@ const inferenceWorker = new Worker<InferenceJobData, InferenceJobResult>(
     const { modelId, userId, input, apiKeyId } = job.data;
     const startTime = Date.now();
     const traceId = job.id || uuidv4();
+    let containerAcquired = false;
+    let containerInfo: any = null;
 
     logger.info({ modelId, jobId: job.id, traceId }, 'Processing inference job');
 
@@ -146,13 +178,19 @@ const inferenceWorker = new Worker<InferenceJobData, InferenceJobResult>(
       const modelOwnerId = modelResult.rows[0].owner_id;
       const endpoint = config?.api?.endpoint || '/predict';
 
-      const containerInfo = await acquireContainer(modelId, {
-        modelId,
-        modelVersion: '1.0',
-        storagePath: versionResult.rows[0]?.storage_path || '',
-        codexonConfig: config,
-        port: containerInfo?.port || 9000
-      }).catch(() => null);
+      let containerInfo = null;
+      try {
+        containerInfo = await acquireContainer(modelId, {
+          modelId,
+          modelVersion: '1.0',
+          storagePath: versionResult.rows[0]?.storage_path || '',
+          codexonConfig: config,
+          port: 9000
+        });
+        containerAcquired = true;
+      } catch (err) {
+        logger.warn({ modelId, error: (err as Error).message }, 'Failed to acquire container');
+      }
 
       let result: any;
       
@@ -193,7 +231,7 @@ const inferenceWorker = new Worker<InferenceJobData, InferenceJobResult>(
       metrics.recordRequest();
       metrics.addRevenue(creatorRevenue);
 
-      if (containerInfo) {
+      if (containerAcquired && containerInfo) {
         await releaseContainer(modelId, latency);
       }
 
@@ -207,6 +245,15 @@ const inferenceWorker = new Worker<InferenceJobData, InferenceJobResult>(
       };
     } catch (error) {
       metrics.recordError();
+      
+      if (containerAcquired) {
+        try {
+          await releaseContainer(modelId, Date.now() - startTime);
+        } catch (releaseError) {
+          logger.warn({ modelId, error: (releaseError as Error).message }, 'Failed to release container on error');
+        }
+      }
+      
       logger.error({ modelId, error: (error as Error).message, traceId }, 'Inference job failed');
       
       throw error;

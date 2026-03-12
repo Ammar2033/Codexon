@@ -74,6 +74,20 @@ export default function Dashboard() {
       )}
 
       <div className="mt-8">
+        <h2 className="text-xl font-semibold mb-4">Quick Links</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <a href="/dashboard/usage" className="p-4 border rounded-lg hover:shadow-md transition">
+            <h3 className="font-semibold mb-1">View Usage</h3>
+            <p className="text-sm text-gray-500">See your API request history</p>
+          </a>
+          <a href="/models" className="p-4 border rounded-lg hover:shadow-md transition">
+            <h3 className="font-semibold mb-1">Browse Models</h3>
+            <p className="text-sm text-gray-500">Discover AI models</p>
+          </a>
+        </div>
+      </div>
+
+      <div className="mt-8">
         <h2 className="text-xl font-semibold mb-4">API Keys</h2>
         <ApiKeysList />
       </div>

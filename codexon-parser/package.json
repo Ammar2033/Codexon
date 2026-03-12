@@ -2,7 +2,7 @@
   "name": "codexon-parser",
   "displayName": "Codexon AI Manager",
   "description": "Professional tool for managing .codexon AI model configuration files.",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "publisher": "CodexonAI",
   "license": "MIT",
   "icon": "images/logo.png",
@@ -34,7 +34,11 @@
         "mimetypes": [
           "application/json"
         ],
-        "configuration": "./language-configuration.json"
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./images/codexon-icon.png",
+          "dark": "./images/codexon-icon.png"
+        }
       }
     ],
     "grammars": [
