@@ -1,0 +1,30 @@
+{
+  "Insert Codexon Template": {
+    "prefix": "codexon-template",
+    "body": [
+      "{",
+      "  \"model\": {",
+      "    \"name\": \"${1:model-name}\",",
+      "    \"version\": \"${2:1.0}\",",
+      "    \"description\": \"${3:description}\"",
+      "  },",
+      "  \"runtime\": {",
+      "    \"framework\": \"${4|onnx,pytorch,tensorflow|}\",",
+      "    \"python\": \"${5:3.12}\"",
+      "  },",
+      "  \"resources\": {",
+      "    \"cpu\": ${6:2},",
+      "    \"memory\": \"${7:4GB}\",",
+      "    \"gpu\": ${8:0}",
+      "  },",
+      "  \"api\": {",
+      "    \"endpoint\": \"/predict\"",
+      "  },",
+      "  \"billing\": {",
+      "    \"price_per_request\": ${9:0.001}",
+      "  }",
+      "}"
+    ],
+    "description": "Create a new .codexon file structure"
+  }
+}

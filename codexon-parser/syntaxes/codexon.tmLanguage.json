@@ -1,0 +1,11 @@
+{
+	"$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+	"name": "Codexon",
+	"scopeName": "source.codexon",
+	"injectionSelector": "L:source.json",
+	"patterns": [
+		{
+			"include": "source.json"
+		}
+	]
+}

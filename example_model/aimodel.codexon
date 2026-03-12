@@ -1,0 +1,22 @@
+{
+  "model": {
+    "name": "example-image-classifier",
+    "version": "1.0",
+    "description": "An example image classification model for demonstration"
+  },
+  "runtime": {
+    "framework": "onnx",
+    "python": "3.12"
+  },
+  "resources": {
+    "cpu": 2,
+    "memory": "4GB",
+    "gpu": 0
+  },
+  "api": {
+    "endpoint": "/predict"
+  },
+  "billing": {
+    "price_per_request": 0.002
+  }
+}

@@ -1,0 +1,58 @@
+[
+  {
+    "description": "Initialize project structure",
+    "status": "completed"
+  },
+  {
+    "description": "Create PostgreSQL database schema",
+    "status": "completed"
+  },
+  {
+    "description": "Initialize backend Node.js project",
+    "status": "completed"
+  },
+  {
+    "description": "Implement backend authentication endpoints",
+    "status": "completed"
+  },
+  {
+    "description": "Implement backend user endpoints",
+    "status": "completed"
+  },
+  {
+    "description": "Implement backend model upload and deployment endpoints",
+    "status": "completed"
+  },
+  {
+    "description": "Implement backend API key management endpoints",
+    "status": "completed"
+  },
+  {
+    "description": "Implement backend marketplace endpoints",
+    "status": "completed"
+  },
+  {
+    "description": "Implement .codexon manifest parser",
+    "status": "completed"
+  },
+  {
+    "description": "Setup Docker for model execution",
+    "status": "completed"
+  },
+  {
+    "description": "Create Python model runner service",
+    "status": "completed"
+  },
+  {
+    "description": "Initialize frontend Next.js project",
+    "status": "completed"
+  },
+  {
+    "description": "Implement frontend pages and components",
+    "status": "completed"
+  },
+  {
+    "description": "Integrate frontend and backend",
+    "status": "completed"
+  }
+]

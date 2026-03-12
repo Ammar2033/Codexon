@@ -1,0 +1,85 @@
+{
+  "name": "codexon-parser",
+  "displayName": "Codexon AI Manager",
+  "description": "Professional tool for managing .codexon AI model configuration files.",
+  "version": "1.0.4",
+  "publisher": "CodexonAI",
+  "license": "MIT",
+  "icon": "images/logo.png",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Snippets",
+    "Linters"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onCommand:codexon.openWizard",
+    "onCommand:codexon.validate",
+    "onLanguage:codexon"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "codexon",
+        "extensions": [
+          ".codexon"
+        ],
+        "aliases": [
+          "Codexon",
+          "codexon"
+        ],
+        "mimetypes": [
+          "application/json"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "codexon",
+        "scopeName": "source.codexon",
+        "path": "./syntaxes/codexon.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "codexon",
+        "path": "./snippets/codexon.json"
+      }
+    ],
+    "jsonValidation": [
+      {
+        "fileMatch": "*.codexon",
+        "url": "./schemas/codexon-schema.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "codexon.openWizard",
+        "title": "Codexon: Create New Model (Wizard)",
+        "category": "Codexon"
+      },
+      {
+        "command": "codexon.validate",
+        "title": "Codexon: Validate JSON Structure",
+        "category": "Codexon"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package",
+    "publish": "vsce publish"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.80.0",
+    "@types/node": "18.x",
+    "typescript": "^5.1.0",
+    "@vscode/vsce": "^2.15.0"
+  }
+}
